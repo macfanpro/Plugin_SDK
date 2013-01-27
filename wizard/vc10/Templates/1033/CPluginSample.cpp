@@ -14,74 +14,110 @@ namespace [!output PROJECT_NAME_SAFE]Plugin
 
     CPlugin[!output PROJECT_NAME_SAFE]::~CPlugin[!output PROJECT_NAME_SAFE]()
     {
+        Release( true );
+
         gPlugin = NULL;
     }
 
-    void CPlugin[!output PROJECT_NAME_SAFE]::Release()
+    bool CPlugin[!output PROJECT_NAME_SAFE]::Release( bool bForce )
     {
-        // Should be called while Game is still active otherwise there might be leaks/problems
-        CPluginBase::Release();
+        bool bRet = true;
+        bool bWasInitialized = m_bIsFullyInitialized; // Will be reset by base class so backup
 
-        // Depending on your plugin you might not want to unregister anything
-        // if the System is quitting.
-        // if(gEnv && gEnv->pSystem && !gEnv->pSystem->IsQuitting()) {
-
-        // Unregister CVars
-        if ( gEnv && gEnv->pConsole )
+        if ( !m_bCanUnload )
         {
-            // ...
+            // Note: Type Unregistration will be automatically done by the Base class (Through RegisterTypes)
+            // Should be called while Game is still active otherwise there might be leaks/problems
+            bRet = CPluginBase::Release( bForce );
+
+            if ( bRet )
+            {
+                if ( bWasInitialized )
+                {
+                    // TODO: Cleanup stuff that can only be cleaned up if the plugin was initialized
+                }
+
+                // Cleanup like this always (since the class is static its cleaned up when the dll is unloaded)
+                gPluginManager->UnloadPlugin( GetName() );
+
+                // Allow Plugin Manager garbage collector to unload this plugin
+                AllowDllUnload();
+            }
         }
 
-        // Unregister game objects
-        if ( gEnv && gEnv->pGameFramework )
-        {
-            // ...
-        }
-
-        // Cleanup like this always (since the class is static its cleaned up when the dll is unloaded)
-        gPluginManager->UnloadPlugin( GetName() );
+        return bRet;
     };
 
-    bool CPlugin[!output PROJECT_NAME_SAFE]::Init( SSystemGlobalEnvironment& env, SSystemInitParams& startupParams, IPluginBase* pPluginManager )
+    bool CPlugin[!output PROJECT_NAME_SAFE]::Init( SSystemGlobalEnvironment& env, SSystemInitParams& startupParams, IPluginBase* pPluginManager, const char* sPluginDirectory )
     {
         gPluginManager = ( PluginManager::IPluginManager* )pPluginManager->GetConcreteInterface( NULL );
-        CPluginBase::Init( env, startupParams, pPluginManager );
-
-        // Register CVars/Commands
-        if ( gEnv && gEnv->pConsole )
-        {
-            // TODO: Register CVARs/Commands here if you have some
-            // ...
-        }
-
-        // Register Game Objects
-        // TODO: Register Game Objects here if you have some
-        // ...
-
-        // Note: Autoregister Flownodes will be automatically registered
+        CPluginBase::Init( env, startupParams, pPluginManager, sPluginDirectory );
 
         return true;
+    }
+
+    bool CPlugin[!output PROJECT_NAME_SAFE]::RegisterTypes( int nFactoryType, bool bUnregister )
+    {
+        // Note: Autoregister Flownodes will be automatically registered by the Base class
+        bool bRet = CPluginBase::RegisterTypes( nFactoryType, bUnregister );
+
+        using namespace PluginManager;
+        eFactoryType enFactoryType = eFactoryType( nFactoryType );
+
+        if ( bRet )
+        {
+            if ( gEnv && gEnv->pSystem && !gEnv->pSystem->IsQuitting() )
+            {
+                // CVars
+                if ( gEnv->pConsole && ( enFactoryType == FT_All || enFactoryType == FT_CVar ) )
+                {
+                    if ( !bUnregister )
+                    {
+                        // TODO: Register CVars here if you have some
+                        // ...
+                    }
+
+                    else
+                    {
+                        // TODO: Unregister CVars here if you have some
+                        // ...
+                    }
+                }
+
+                // CVars Commands
+                if ( gEnv->pConsole && ( enFactoryType == FT_All || enFactoryType == FT_CVarCommand ) )
+                {
+                    if ( !bUnregister )
+                    {
+                        // TODO: Register CVar Commands here if you have some
+                        // ...
+                    }
+
+                    else
+                    {
+                        // TODO: Unregister CVar Commands here if you have some
+                        // ...
+                    }
+                }
+
+                // Game Objects
+                if ( gEnv->pGameFramework && ( enFactoryType == FT_All || enFactoryType == FT_GameObjectExtension ) )
+                {
+                    if ( !bUnregister )
+                    {
+                        // TODO: Register Game Object Extensions here if you have some
+                        // ...
+                    }
+                }
+            }
+        }
+
+        return bRet;
     }
 
     const char* CPlugin[!output PROJECT_NAME_SAFE]::ListCVars() const
     {
         return "..."; // TODO: Enter CVARs/Commands here if you have some
-    }
-
-    bool CPlugin[!output PROJECT_NAME_SAFE]::Check( const char* sAPIVersion ) const
-    {
-        if ( !sAPIVersion )
-        {
-            return false;
-        }
-
-        // TODO: You could add a more complex version check here (e.g. if you support multiple versions)
-        if ( SFileVersion( sAPIVersion ) == SFileVersion( "[!output PLUGIN_COMPATIBLITY]" ) )
-        {
-            return true;
-        }
-
-        return false;
     }
 
     const char* CPlugin[!output PROJECT_NAME_SAFE]::GetStatus() const

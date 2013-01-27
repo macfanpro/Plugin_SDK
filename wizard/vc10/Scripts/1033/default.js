@@ -2,50 +2,97 @@
 
 function OnFinish(selProj, selObj)
 {
-    try 
-    {
-        var strProjectPath = wizard.FindSymbol('PROJECT_PATH');
+    try {
+
+        // Create Project Name
         var strProjectName = wizard.FindSymbol('PROJECT_NAME');
+        strProjectName = strProjectName.replace("Plugin_", ""); // done this way so directory existence checks still works
+        strProjectName = strProjectName.replace("Plugin", ""); // further possibilities
+        strProjectName = strProjectName.replace("plugin", ""); // further possibilities
+        strProjectName = strProjectName.replace(" ", ""); // remove spaces
 
         // Safe Project Name
-        strProjectName = strProjectName.replace(/[^\w\s]/gi, '');
+        strProjectName = CreateCPPName(CreateSafeName(strProjectName)).replace(/[^\w\s]/gi, '');
+        wizard.RemoveSymbol('PROJECT_NAME');
+        wizard.AddSymbol('PROJECT_NAME', strProjectName);
         wizard.AddSymbol('PROJECT_NAME_SAFE', strProjectName);
+        wizard.RemoveSymbol('VS_SOLUTION_NAME');
+        wizard.AddSymbol('VS_SOLUTION_NAME', "Plugin_" + strProjectName);
+
+        var strProjectPath = wizard.FindSymbol('PROJECT_PATH');
+        strProjectPath += "\\..\\Plugin_" + strProjectName + "\\project";
+
+        if (!CanUseDrive(strProjectPath))
+            return VS_E_WIZARDBACKBUTTONPRESS;
 
         // Safe Project Name in Uppercase
         wizard.AddSymbol('PROJECT_NAME_SAFE_UPPERCASE', strProjectName.toUpperCase());
 
+        // Current Year for Copyright
+        var currentTime = new Date();
+        wizard.AddSymbol('CURRENT_YEAR', currentTime.getFullYear());
+
         // Render Files that require it
         var strTemplatePath = wizard.FindSymbol('TEMPLATES_PATH');
 
-        // Plugin properties directly used without modification from Plugin SDK (so this isn't reqiured anymore)
+        // Plugin properties directly used without modification from Plugin SDK (so this isn't required anymore)
         //wizard.RenderTemplate(strTemplatePath + "\\Plugin_Settings.props", "Plugin_Settings.props", true); 
         
         // The project file needs to be rendered
-        wizard.RenderTemplate(strTemplatePath + "\\default.vcxproj", strTemplatePath + "\\default_tmp.vcxproj", false, true);
-
-        // files need to be renamed...
-
-        // TODO: look into creating temp dir to create renamed files and temp project. (see CreateCustomInfFile)
+        wizard.RenderTemplate(strTemplatePath + "\\default.vcxproj", strProjectPath + "\\default.vcxproj", false, true);
 
         selProj = CreateCustomProject(strProjectName, strProjectPath);
+
+        // Delete temp rendered project
+        var fso = new ActiveXObject('Scripting.FileSystemObject');
+        DelFile(fso, strProjectPath + "\\default.vcxproj"); 
+
         AddConfig(selProj, strProjectName);
-        SetupFilters(selProj);
+        AddFilters(selProj); //SetupFilters(selProj);
 
         var InfFile = CreateCustomInfFile();
+
         AddFilesToCustomProj(selProj, strProjectName, strProjectPath, InfFile);
+
         PchSettings(selProj);
+
         InfFile.Delete();
 
         selProj.Object.Save();
 
-        // delete temp rendered project
-        var fso = new ActiveXObject('Scripting.FileSystemObject');
-        DelFile(fso, strTemplatePath + "\\default_tmp.vcxproj"); 
+        // Open files
+        var rgoFiles = [
+            selProj.Object.Files("readme.md").Object,
+            selProj.Object.Files("CPlugin" + strProjectName + ".h").Object,
+            selProj.Object.Files("CPlugin" + strProjectName + ".cpp").Object,
+            selProj.Object.Files("IPlugin" + strProjectName + ".h").Object
+         ];
+
+        for (var iFileToOpen = 0; iFileToOpen < rgoFiles.length; iFileToOpen++) {
+            var oFileToOpen = rgoFiles[iFileToOpen];
+
+            var vsViewKind = vsViewKindPrimary;
+
+            switch (oFileToOpen.Object.FileType) {
+                case eFileTypeCppForm:
+                case eFileTypeCppClass:
+                case eFileTypeCppControl:
+                case eFileTypeCppWebService:
+                    vsViewKind = vsViewKindDesigner;
+            }
+
+            var window = oFileToOpen.Open(vsViewKind);
+
+            if (window) {
+                window.visible = true;
+            }
+        }
     }
     catch(e)
     {
         if (e.description.length != 0)
             SetErrorInfo(e);
+
         return e.number
     }
 }
@@ -54,9 +101,11 @@ function CreateCustomProject(strProjectName, strProjectPath)
 {
     try
     {
-        var strProjTemplatePath = wizard.FindSymbol('TEMPLATES_PATH');
+        //var strProjTemplatePath = wizard.FindSymbol('TEMPLATES_PATH');
         var strProjTemplate = '';
-        strProjTemplate = strProjTemplatePath + '\\default_tmp.vcxproj';
+
+        //strProjTemplate = strProjTemplatePath + '\\default.vcxproj';
+        strProjTemplate = strProjectPath + '\\default.vcxproj'; 
 
         var Solution = dte.Solution;
         var strSolutionName = "";
@@ -66,7 +115,8 @@ function CreateCustomProject(strProjectName, strProjectPath)
             strSolutionName = wizard.FindSymbol("VS_SOLUTION_NAME");
             if (strSolutionName.length)
             {
-                var strSolutionPath = strProjectPath.substr(0, strProjectPath.length - strProjectName.length);
+                //var strSolutionPath = strProjectPath.substr(0, strProjectPath.length - strProjectName.length);
+                var strSolutionPath = strProjectPath;
                 Solution.Create(strSolutionPath, strSolutionName);
             }
         }
@@ -76,7 +126,7 @@ function CreateCustomProject(strProjectName, strProjectPath)
 
         var oTarget = wizard.FindSymbol("TARGET");
         var prj;
-        if (wizard.FindSymbol("WIZARD_TYPE") == vsWizardAddSubProject)  // vsWizardAddSubProject
+        if (wizard.FindSymbol("WIZARD_TYPE") == vsWizardAddSubProject)
         {
             var prjItem = oTarget.AddFromTemplate(strProjTemplate, strProjectNameWithExt);
             prj = prjItem.SubProject;
@@ -85,6 +135,7 @@ function CreateCustomProject(strProjectName, strProjectPath)
         {
             prj = oTarget.AddFromTemplate(strProjTemplate, strProjectPath, strProjectNameWithExt);
         }
+
         var fxtarget = wizard.FindSymbol("TARGET_FRAMEWORK_VERSION");
         if (fxtarget != null && fxtarget != "")
         {
@@ -106,11 +157,28 @@ function AddFilters(proj)
     try
     {
         // Add the folders to your project
-        var group = proj.Object.AddFilter("Source Files");
-        group.Filter = ".cpp;.cxx;.c";
+        var L_strSource_Text = "Source Files";
+        var group = proj.Object.AddFilter(L_strSource_Text);
+        group.Filter = "cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx";
+        group.UniqueIdentifier = "{4FC737F1-C7A5-4376-A066-2A32D752A2FF}";
 
-        group = proj.Object.AddFilter("Header");
-        gorup.Filter = ".h;.hpp";
+        var L_strHeader_Text = "Header Files";
+        group = proj.Object.AddFilter(L_strHeader_Text);
+        group.Filter = "h;hpp;hxx;hm;inl;inc;xsd";
+        group.UniqueIdentifier = "{93995380-89BD-4b04-88EB-625FBE52EBFB}";
+
+        var L_strResources_Text = "Resource Files";
+        group = proj.Object.AddFilter(L_strResources_Text);
+        group.Filter = "rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms";
+        group.UniqueIdentifier = "{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}";
+
+        group = proj.Object.AddFilter("Flownodes");
+
+        group = proj.Object.AddFilter("Tools");
+        group.Filter = "exe;bat;astylerc";
+
+        group = proj.Object.AddFilter("Installer");
+        group.Filter = "nsi;nsh";
     }
     catch(e)
     {
@@ -152,7 +220,12 @@ function AddConfig(proj, strProjectName)
 
 function PchSettings(proj)
 {
-    // TODO: specify pch settings
+    var precompiledheader = proj.Object.Files("StdAfx.cpp");
+
+    for (var iConfig = 1; iConfig <= precompiledheader.FileConfigurations.Count; iConfig++)
+    {
+        precompiledheader.FileConfigurations(iConfig).Tool.UsePrecompiledHeader = pchCreateUsingSpecific;
+    }
 }
 
 function DelFile(fso, strWizTempFile)
@@ -201,16 +274,60 @@ function GetTargetName(strName, strProjectName)
 {
     try
     {
-        // TODO: set the name of the rendered file based on the template filename
         var strTarget = strName;
 
-        /*
-        if (strName == 'readme.txt')
-            strTarget = 'ReadMe.txt';
+        var strProjectNameSafe = wizard.FindSymbol('PROJECT_NAME_SAFE');
 
-        if (strName == 'sample.txt')
-            strTarget = 'Sample.txt';
-        */
+        if (strName == "readme.md")
+            strTarget = "..\\" + strName;
+
+        if (strName == "changelog.md")
+            strTarget = "..\\" + strName;
+
+        if (strName == "license.txt")
+            strTarget = "..\\" + strName;
+
+        if (strName == "authors.txt")
+            strTarget = "..\\" + strName;
+
+        if (strName == "CPluginSample.h")
+            strTarget = "..\\src\\CPlugin" + strProjectNameSafe + ".h";
+
+        if (strName == "CPluginSample.cpp")
+            strTarget = "..\\src\\CPlugin" + strProjectNameSafe + ".cpp";
+
+        if (strName == "CPluginSampleModule.cpp")
+            strTarget = "..\\src\\CPlugin" + strProjectNameSafe + "Module.cpp";
+
+        if (strName == "IPluginSample.h")
+            strTarget = "..\\inc\\IPlugin" + strProjectNameSafe + ".h";
+
+        if (strName == "StdAfx.cpp")
+            strTarget = "..\\src\\" + strName;
+
+        if (strName == "StdAfx.h")
+            strTarget = "..\\src\\" + strName;
+
+        if (strName == "tools\\_astyle.exe")
+            strTarget = "..\\" + strName;
+
+        if (strName == "tools\\_stylehelper.bat")
+            strTarget = "..\\" + strName;
+
+        if (strName == "tools\\build.bat")
+            strTarget = "..\\" + strName;
+
+        if (strName == "tools\\codestyle.astylerc")
+            strTarget = "..\\" + strName;
+
+        if (strName == "tools\\stylecode.bat")
+            strTarget = "..\\" + strName;
+
+        if (strName == "tools\\build_installer.bat")
+            strTarget = "..\\" + strName;
+
+        if (strName == "tools\\Sample_Installer.nsi")
+            strTarget = "..\\tools\\" + strProjectNameSafe + "_Installer.nsi";
 
         return strTarget;
     }
@@ -244,11 +361,26 @@ function AddFilesToCustomProj(proj, strProjectName, strProjectPath, InfFile)
 
                 var bCopyOnly = false;  //"true" will only copy the file from strTemplate to strTarget without rendering/adding to the project
                 var strExt = strName.substr(strName.lastIndexOf("."));
-                if(strExt==".bmp" || strExt==".ico" || strExt==".gif" || strExt==".rtf" || strExt==".css")
+                if (strExt == ".astylerc" || strExt == ".exe" || strExt == ".bmp" || strExt == ".ico" || strExt == ".gif" || strExt == ".rtf" || strExt == ".css")
                     bCopyOnly = true;
 
                 wizard.RenderTemplate(strTemplate, strFile, bCopyOnly);
-                proj.Object.AddFile(strFile);
+
+                var projFilters = proj.Object.Filters;
+                // Filter / add
+                if (strFile.indexOf('resource.h') !== -1) 
+                {      
+                    var filterRc = projFilters.Item("Resource Files");
+                    filterRc.AddFile(strFile);
+                } else if (strFile.indexOf('Installer') !== -1 || strFile.indexOf('installer') !== -1 || strFile.indexOf('.nsi') !== -1) {
+                    var filterRc = projFilters.Item("Installer");
+                    filterRc.AddFile(strFile);
+                } else if (strFile.indexOf('.exe') !== -1 || strFile.indexOf('.bat') !== -1 || strFile.indexOf('.astyle') !== -1) {
+                    var filterRc = projFilters.Item("Tools");
+                    filterRc.AddFile(strFile);
+                } else {
+                    proj.Object.AddFile(strFile);
+                }
             }
         }
         strTextStream.Close();
@@ -258,7 +390,6 @@ function AddFilesToCustomProj(proj, strProjectName, strProjectPath, InfFile)
         throw e;
     }
 }
-
 
 // SIG // Begin signature block
 // SIG // MIIXPgYJKoZIhvcNAQcCoIIXLzCCFysCAQExCzAJBgUr

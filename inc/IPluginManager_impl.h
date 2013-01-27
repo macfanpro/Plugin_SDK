@@ -1,8 +1,31 @@
 /* CE3 Plugin Manager - for licensing and copyright see license.txt */
 
 #include <IPluginManager.h>
+#include <CryLibrary.h>
 
+// Definition can only happen once
+#if defined(__GAMESTARTUP_H__) || defined(PLUGIN_SDK_DEFINE_MANAGER)
 PluginManager::IPluginManager* gPluginManager = NULL; //!< Global plugin manager pointer inside game dll
+#endif
+
+/**
+* @brief Provide a macro to realize WinProc injector with minimal modifications
+*/
+#ifndef PLUGIN_SDK_WINPROC_INJECTOR
+#define PLUGIN_SDK_WINPROC_INJECTOR(...) \
+    LRESULT CALLBACK WndProc_(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam); \
+    __VA_ARGS__ { \
+        if(gPluginManager) { \
+            if(gPluginManager->PreWinProcInterceptor(hWnd, msg, wParam, lParam)) { \
+                return gPluginManager->PostWinProcInterceptor(hWnd, msg, wParam, lParam, 0); \
+            } else { \
+                return gPluginManager->PostWinProcInterceptor(hWnd, msg, wParam, lParam, WndProc_(hWnd, msg, wParam, lParam)); \
+            } \
+        } \
+        return WndProc_(hWnd, msg, wParam, lParam); \
+    } \
+    LRESULT CALLBACK WndProc_(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+#endif
 
 namespace PluginManager
 {
@@ -13,16 +36,16 @@ namespace PluginManager
     * @param startupParams CryEngine Startup Params
     * @param sBaseInterfaceVersion Plugin SDK Base Interface Version
     */
-    bool InitPluginManager( SSystemInitParams& startupParams, const char* sBaseInterfaceVersion = NULL, const char* sConcreteInterfaceVersion = NULL )
+    static bool InitPluginManager( SSystemInitParams& startupParams, const char* sBaseInterfaceVersion = NULL, const char* sConcreteInterfaceVersion = NULL )
     {
-        string sPluginManagerPath = PLUGIN_FOLDER "\\" PLUGIN_TEXT "_"  "Manager" CrySharedLibrayExtension;
+        string sPluginManagerPath = PLUGIN_FOLDER "\\" PLUGIN_TEXT "_" PLUGIN_MANAGER CrySharedLibrayExtension;
         HINSTANCE hModule = CryLoadLibrary( sPluginManagerPath );
 
         // Plugin link library found?
         if ( hModule )
         {
             // Check if its a plugin
-            void* fptr = CryGetProcAddress( hModule, "GetPluginInterface" );
+            void* fptr = CryGetProcAddress( hModule, PLUGIN_ENTRYPOINT );
 
             if ( fptr )
             {
@@ -39,9 +62,9 @@ namespace PluginManager
                         // plugin link library found
                         if ( !iface->IsInitialized() ) // Initialize plugins in order
                         {
-                            if ( !iface->Init( *gEnv, startupParams, NULL ) )
+                            if ( !iface->Init( *gEnv, startupParams, NULL, NULL ) )
                             {
-                                CryLogAlways( "[" PLUGIN_TEXT "_Manager] Init failed" );
+                                CryLogAlways( "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] Init failed" );
                             }
                         }
 
@@ -51,14 +74,14 @@ namespace PluginManager
                             {
                                 if ( !iface->InitDependencies() )
                                 {
-                                    CryLogAlways( "[" PLUGIN_TEXT "_Manager] InitDependencies failed" );
+                                    CryLogAlways( "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] InitDependencies failed" );
                                 }
 
                             }
 
                             else
                             {
-                                CryLogAlways( "[" PLUGIN_TEXT "_Manager] CheckDependencies failed" );
+                                CryLogAlways( "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] CheckDependencies failed" );
                             }
                         }
 
@@ -72,37 +95,37 @@ namespace PluginManager
 
                             else
                             {
-                                CryLogAlways(  "[" PLUGIN_TEXT "_Manager] Concrete Interface not available in the requested version" );
+                                CryLogAlways(  "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] Concrete Interface not available in the requested version" );
                             }
                         }
 
                         else
                         {
-                            CryLogAlways(  "[" PLUGIN_TEXT "_Manager] Couldn't be fully initialized" );
+                            CryLogAlways(  "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] Couldn't be fully initialized" );
                         }
                     }
 
                     else
                     {
-                        CryLogAlways(  "[" PLUGIN_TEXT "_Manager] Not compatible with this CryEngine SDK version(%s)", buildVersion );
+                        CryLogAlways(  "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] Not compatible with this CryEngine SDK version(%s)", buildVersion );
                     }
                 }
 
                 else
                 {
-                    CryLogAlways(  "[" PLUGIN_TEXT "_Manager] Base interface version(%s) couldn't be retrieved", sBaseInterfaceVersion ? sBaseInterfaceVersion : "" );
+                    CryLogAlways(  "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] Base interface version(%s) couldn't be retrieved", sBaseInterfaceVersion ? sBaseInterfaceVersion : "" );
                 }
             }
 
             else
             {
-                CryLogAlways(  "[" PLUGIN_TEXT "_Manager] Plugin entry point GetPluginInterface not found" );
+                CryLogAlways(  "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] Plugin entry point " PLUGIN_ENTRYPOINT " not found" );
             }
         }
 
         else
         {
-            CryLogAlways(  "[" PLUGIN_TEXT "_Manager] CryLoadLibrary Module(%s) couldn't be loaded, check path or dependencies", sPluginManagerPath.c_str() );
+            CryLogAlways(  "[" PLUGIN_TEXT "_" PLUGIN_MANAGER "] CryLoadLibrary Module(%s) couldn't be loaded, check path or dependencies", sPluginManagerPath.c_str() );
         }
 
         return false; // Failure
@@ -114,12 +137,16 @@ namespace PluginManager
     * @attention the global environment is not full initialized.
     * @see InitPluginsLast
     */
-    void InitPluginsBeforeFramework()
+    static void InitPluginsBeforeFramework()
     {
         if ( gPluginManager )
         {
             gPluginManager->ReloadAllPlugins();
             gPluginManager->InitializePluginRange( IM_BeforeFramework, IM_BeforeFramework_3 );
+            gPluginManager->RegisterTypesPluginRange( IM_BeforeFramework, IM_BeforeFramework_3, FT_None );
+            gPluginManager->RegisterTypesPluginRange( IM_BeforeFramework, IM_BeforeFramework_3, FT_CVar );
+            gPluginManager->RegisterTypesPluginRange( IM_BeforeFramework, IM_BeforeFramework_3, FT_CVarCommand );
+            gPluginManager->RegisterTypesPluginRange( IM_BeforeFramework, IM_BeforeFramework_3, FT_GameObjectExtension );
         }
     }
 
@@ -127,11 +154,32 @@ namespace PluginManager
     * @brief Initialize plugins after the game is initialized.
     * Most sensible for all plugins.
     */
-    void InitPluginsLast()
+    static void InitPluginsLast()
     {
         if ( gPluginManager )
         {
             gPluginManager->InitializePluginRange( IM_Last, IM_Last_3 );
+            gPluginManager->RegisterTypesPluginRange( IM_Last, IM_Last_3, FT_None );
+            gPluginManager->RegisterTypesPluginRange( IM_Last, IM_Last_3, FT_CVar );
+            gPluginManager->RegisterTypesPluginRange( IM_Last, IM_Last_3, FT_CVarCommand );
+            gPluginManager->RegisterTypesPluginRange( IM_Last, IM_Last_3, FT_GameObjectExtension );
+
+            if ( gEnv && gEnv->pConsole )
+            {
+                gEnv->pConsole->ExecuteString( "pm_listsi" );
+                gEnv->pConsole->ExecuteString( "pm_list" );
+            }
+        }
+    }
+
+    /**
+    * @brief Flownodes need to be registered when Game Flownodes are registered to allow Sandbox Flownode Reset
+    */
+    static void RegisterPluginFlownodes()
+    {
+        if ( gPluginManager )
+        {
+            gPluginManager->RegisterTypesPluginRange( IM_Min, IM_Max, FT_Flownode );
         }
     }
 }
