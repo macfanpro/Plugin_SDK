@@ -16,7 +16,7 @@
 namespace [!output PROJECT_NAME_SAFE]Plugin
 {
     /**
-    * @brief provides information and manages the resources of this plugin.
+    * @brief Provides information and manages the resources of this plugin.
     */
     class CPlugin[!output PROJECT_NAME_SAFE] :
         public PluginManager::CPluginBase,
@@ -27,16 +27,16 @@ namespace [!output PROJECT_NAME_SAFE]Plugin
             ~CPlugin[!output PROJECT_NAME_SAFE]();
 
             // IPluginBase
-            void Release();
+            bool Release( bool bForce = false );
 
             int GetInitializationMode() const
             {
                 return int( PluginManager::IM_Default );
             };
 
-            bool Check( const char* sAPIVersion ) const;
+            bool Init( SSystemGlobalEnvironment& env, SSystemInitParams& startupParams, IPluginBase* pPluginManager, const char* sPluginDirectory );
 
-            bool Init( SSystemGlobalEnvironment& env, SSystemInitParams& startupParams, IPluginBase* pPluginManager );
+            bool RegisterTypes( int nFactoryType, bool bUnregister );
 
             const char* GetVersion() const
             {
@@ -45,7 +45,7 @@ namespace [!output PROJECT_NAME_SAFE]Plugin
 
             const char* GetName() const
             {
-                return "[!output PROJECT_NAME_SAFE]";
+                return PLUGIN_NAME;
             };
 
             const char* GetCategory() const
@@ -55,7 +55,7 @@ namespace [!output PROJECT_NAME_SAFE]Plugin
 
             const char* ListAuthors() const
             {
-                return "[!output PLUGIN_AUTHOR]"; // TODO: add your name here
+                return "[!output PLUGIN_AUTHOR]";
             };
 
             const char* ListCVars() const;
@@ -78,8 +78,21 @@ namespace [!output PROJECT_NAME_SAFE]Plugin
                 return static_cast<IPluginBase*>( this );
             };
 
-            // TODO: add your concrete interface implementation
+            // TODO: Add your concrete interface implementation
     };
 
     extern CPlugin[!output PROJECT_NAME_SAFE]* gPlugin;
 }
+
+/**
+* @brief This function is required to use the Autoregister Flownode without modification.
+* Include the file "CPlugin[!output PROJECT_NAME_SAFE].h" in front of flownode.
+*/
+inline void GameWarning( const char* sFormat, ... ) PRINTF_PARAMS( 1, 2 );
+inline void GameWarning( const char* sFormat, ... )
+{
+    va_list ArgList;
+    va_start( ArgList, sFormat );
+    [!output PROJECT_NAME_SAFE]Plugin::gPlugin->LogV( ILog::eWarningAlways, sFormat, ArgList );
+    va_end( ArgList );
+};

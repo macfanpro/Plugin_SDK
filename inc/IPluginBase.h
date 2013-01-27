@@ -1,8 +1,20 @@
-/* CE3 Plugin Manager - for licensing and copyright see license.txt */
+/* Plugin SDK - for licensing and copyright see license.txt */
 
-#define PLUGIN_TEXT "Plugin"
+#define PLUGIN_COMPILED_CDK_VERSION "3.4.3" //!< for reuse of compiled Cryengine SDK version (its not defined in CDK directly so we have to do it ourself)
+#define PLUGIN_TEXT "Plugin" //!< for logging and misc
+#define PLUGIN_FOLDER "Plugins" //!< directory
 
-#define PLUGIN_FOLDER "Plugins"
+/* SDK Version detection ------------------------------------------- */
+#include <IRenderer.h>
+
+#ifdef R_DX11_RENDERER
+#define SDK_VERSION_340 1 //!< Detected Version 3.4.0
+#endif
+
+#ifdef FRT_CLEAR_RESET_VIEWPORT
+#define SDK_VERSION_343 1 //!< Detected Version 3.4.3
+#endif
+/* ----------------------------------------------------------------- */
 
 #pragma once
 
@@ -21,7 +33,22 @@ namespace PluginManager
         IM_Last_2 = 4, //!< For additional ordering of dependencies
         IM_Last_3 = 5, //!< For additional ordering of dependencies
         IM_Max = IM_Last_3,
-        IM_Default = IM_Last, //!< Default is initialize in the end
+        IM_Default = IM_BeforeFramework, //!< Default is initialize in the beginning (previously end)
+    };
+
+    /**
+    * @brief Registry factory types for plugins
+    * Certain object types need to be registered or reregistered at certain points in time or even certain threads.
+    */
+    enum eFactoryType
+    {
+        FT_None = 0, //!< No certain type defined / misc types / lua
+        FT_Flownode = 1, //!< For Flownodes (important for Sandbox reregistration through: GameDLL CGame::RegisterGameFlowNodes)
+        FT_GameObjectExtension = 2, //!< For Game Object Classes
+        FT_CVar = 3, //!< For CVars
+        FT_CVarCommand = 4, //!< For Console Commands
+        FT_All = 99, //! For all Types affected at once
+        // To be extended once needed
     };
 
     /**
@@ -84,18 +111,22 @@ namespace PluginManager
 
         /**
         * @brief Initialize the plugin so far that dependencies can do their dependency initialization.
+        * @param env CryEngine environment (Engine pointers)
+        * @param startupParams CryEngine startup parameters (Command line)
+        * @param pPluginManager Plugin SDK plugin manager
+        * @param sPluginDirectory Absolute path in which your plugin was loaded (e.g. "C:\cryengine3_3.4.0\Bin32\Plugins\Flite")
         */
-        virtual bool Init( SSystemGlobalEnvironment& env, SSystemInitParams& startupParams, IPluginBase* pPluginManager ) = 0;
+        virtual bool Init( SSystemGlobalEnvironment& env, SSystemInitParams& startupParams, IPluginBase* pPluginManager, const char* sPluginDirectory ) = 0;
 
         /**
-        * @brief Check if all dependencies are avaible in compatible versions trough the Plugin Manager
-        * Please note the plugin manager itself is also a dependency and must be checked for compatiblity
+        * @brief Check if all dependencies are available in compatible versions trough the Plugin Manager
+        * Please note the plugin manager itself is also a dependency and must be checked for compatibility
         * @see Init
         */
         virtual bool CheckDependencies() const = 0;
 
         /**
-        * @brief Do additional a final initialization as now all dependencies are avaible
+        * @brief Do additional a final initialization as now all dependencies are available
         * After executing this function the plugin must be in usable state.
         */
         virtual bool InitDependencies() = 0;
@@ -143,6 +174,12 @@ namespace PluginManager
         virtual const char* ListGameObjects() const = 0;
 
         /**
+        * @brief General plugin dump functionality
+        * @return all plugin internals for debugging purposes
+        */
+        virtual const char* Dump() const = 0;
+
+        /**
         * @brief Current Status of the plugin
         * Can be used to indicate errors.
         */
@@ -158,9 +195,9 @@ namespace PluginManager
         * @brief Return the requested concrete interface version if implemented by this plugin version
         * @param sInterfaceVersion The requested interface version.
         * @arg NULL for most current.
-        * @return NULL or concrete interface in the requested version is avaible.
+        * @return NULL or concrete interface in the requested version is available.
         */
-        virtual void* GetConcreteInterface( const char* sInterfaceVersion ) = 0;
+        virtual void* GetConcreteInterface( const char* sInterfaceVersion = NULL ) = 0;
 
         /**
         * @brief Return the current extended interface version
@@ -169,16 +206,27 @@ namespace PluginManager
         virtual const char* GetCurrentExtendedInterfaceVersion() const = 0;
 
         /**
-        * @brief Reserved for future use to ensure ABI compability
+        * @brief Reserved for future use to ensure ABI compatibility
         * @param sInterfaceVersion The requested interface version.
         * @arg NULL for most current.
-        * @return NULL or concrete interface in the requested version is avaible.
+        * @return NULL or concrete interface in the requested version is available.
         */
-        virtual void* GetExtendedInterface( const char* sInterfaceVersion ) = 0;
+        virtual void* GetExtendedInterface( const char* sInterfaceVersion = NULL ) = 0;
+
+        /**
+        * @brief Register Types independent of Init / InitDependencies
+        * Certain object types need to be registered or reregistered at certain points in time or even certain threads.
+        * This functionality was added to allow for more flexibility in that regard.
+        * @param nFactoryType The factory type objects to be registered.
+        * @see eFactoryType
+        * @param bUnregister Set to true if types should be unregistered (most types can't be unregistered atm, but maybe it'll be possible in the future)
+        * @return success
+        */
+        virtual bool RegisterTypes( int nFactoryType = int( FT_None ), bool bUnregister = false ) = 0;
     };
 
     /**
-    * @brief Plugins should use their own logging functionallity so it can easily be recognized and redirected to other Logging facilities then the cryengine console.
+    * @brief Plugins should use their own logging functionality so it can easily be recognized and redirected to other Logging facilities then the cryengine console.
     * Its for internal use inside each plugin only.
     */
     struct IPluginLog
@@ -211,6 +259,8 @@ namespace PluginManager
     typedef IPluginBase* ( *fGetPluginInterface )( const char* );
 };
 
+#define PLUGIN_ENTRYPOINT "GetPluginInterface"
+
 /**
 * @brief DLL C-APIs
 */
@@ -220,7 +270,7 @@ extern "C"
     * @brief Create the Plugin Base Interface in the requested version
     * @param sInterfaceVersion The requested interface version.
     * @arg NULL for most current.
-    * @return NULL or concrete interface in the requested version is avaible.
+    * @return NULL or concrete interface in the requested version is available.
     */
-    DLL_EXPORT PluginManager::IPluginBase* GetPluginInterface( const char* sInterfaceVersion );
+    DLL_EXPORT PluginManager::IPluginBase* GetPluginInterface( const char* sInterfaceVersion = NULL );
 }
